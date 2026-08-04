@@ -3,8 +3,8 @@ name: import growtopia item id
 on:
   workflow_dispatch:
   push:
-    paths:
-      - .github/workflows/import-growtopia-item-id.yml
+    branches:
+      - main
 
 permissions:
   contents: write
