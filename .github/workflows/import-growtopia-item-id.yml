@@ -2,9 +2,6 @@ name: import growtopia item id
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: write
@@ -60,5 +57,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "data: simpen snapshot item id Growtopia"
+          git commit -m "data: update snapshot item id Growtopia"
           git push
