@@ -1,0 +1,73 @@
+name: refresh growtopia item id
+
+on:
+  push:
+    paths:
+      - .github/workflows/refresh-item-id.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ambil repo
+        uses: actions/checkout@v4
+
+      - name: ambil list terbaru dan buang null item
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl \
+            --fail \
+            --location \
+            --retry 3 \
+            --silent \
+            --show-error \
+            "https://raw.githubusercontent.com/badewen/Growtopia-Things/94574a38171de86125f831159bb761e9afc9f50c/item_id_list.txt" \
+            --output /tmp/item-id-raw.txt
+
+          sed 's/\r$//' /tmp/item-id-raw.txt \
+            | grep -E '^[0-9]+: .+' \
+            | grep -v -i 'null_item' \
+            > growtopia-item-id.txt
+
+          total=$(wc -l < growtopia-item-id.txt)
+
+          if [ "$total" -lt 10000 ]; then
+            echo "hasilnya kurang lengkap, cuma $total item"
+            exit 1
+          fi
+
+          if grep -qi 'null_item' growtopia-item-id.txt; then
+            echo "masih ada null item"
+            exit 1
+          fi
+
+          grep -q '^0: Blank$' growtopia-item-id.txt
+          grep -q '^242: World Lock$' growtopia-item-id.txt
+          grep -q '^14413: Bronze Grow Royal of the Month Title Seed$' growtopia-item-id.txt
+
+          echo "aman, dapet $total item tanpa null_item"
+
+      - name: simpen hasilnya
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add growtopia-item-id.txt
+
+          if git diff --cached --quiet; then
+            echo "datanya udah sama"
+            exit 0
+          fi
+
+          git commit -m "data: update semua item id Growtopia"
+          git push
