@@ -1,0 +1,4 @@
+Dont forget to give a star on this repository!
+
+sumber asli: https://github.com/zephilion/growtopia-item-id
+snapshot: 960738a1ce32f7f951baaa697d82a095980efe2c
