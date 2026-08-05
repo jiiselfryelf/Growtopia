@@ -1,0 +1,356 @@
+local TAG = "JimiProxy"
+local VERSION = "1.3.r-1"
+local OWNER = "Jimi"
+local DISCORD = "@graceejim"
+local DC_LINK = "https://discord.gg/JuMxXMMpw3"
+local WA_LINK = "https://chat.whatsapp.com/IQk004d5FJo6XI8MoOaqIG"
+local LAST_UPDATED = "5-8-2026 - 17-34 WIB"
+local NEWS = {
+    "Add BJ feature",
+    "Add BJ bet and gems logs",
+    "Auto ProxyJimi visual nick",
+    "Clean old unused feature"
+}
+
+local WL_ID, DL_ID, BGL_ID = 242, 1796, 7188
+local GEM_ID, MAX_GEMS = 112, 21
+local DBOX_ID = 1452
+local LOGS_ICON = 1436
+local NEWS_ICON = 482
+local WRENCH_ICON = 32
+local SPAM_ICON = 2586
+local NICK_ICON = 1794
+local locks = {
+    {id = BGL_ID, short = "BGL", name = "Blue Gem Lock", value = 10000},
+    {id = DL_ID, short = "DL", name = "Diamond Lock", value = 100},
+    {id = WL_ID, short = "WL", name = "World Lock", value = 1}
+}
+local rouletteMode = "REME"
+local consoleWatermark = true
+local bubbleRoulette = true
+local saveWorld = ""
+local donateBox = {x = 63, y = 23, sign = ""}
+local innerVariant, innerPacket = 0, 0
+local wheelLogs, dropLogs, sbLogs, bjGemLogs, bjBetLogs = {}, {}, {}, {}, {}
+local recentSpin = {}
+local pendingDrops = {}
+local donateQueue = {}
+local pendingDonate = nil
+local donateBusy = false
+local donateFail = 0
+local currentLogType = ""
+local currentLogPage = 1
+local LOG_PER_PAGE = 12
+local BORDER_COLOR = "112,86,191,255"
+local BG_COLOR = "43,34,74,200"
+local fastMode = ""
+local blockPopupUntil = 0
+local pendingWrench = {netid = 0, name = "", untilMs = 0}
+local spamActive = false
+local spamText = ""
+local spamDelay = 1200
+local spamSerial = 0
+local spamColorIndex = 1
+local spamColorChat = true
+local spamColors = {"`2", "`3", "`5", "`6", "`9", "`c", "`e", "`b"}
+local nickReal = ""
+local nickName = ""
+
+local function safe(fn, ...)
+    if type(fn) ~= "function" then return nil end
+    local ok, a, b, c = pcall(fn, ...)
+    if ok then return a, b, c end
+    return nil
+end
+
+local function trim(s)
+    s = tostring(s or "")
+    return s:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function strip(s)
+    return tostring(s or ""):gsub("`.", "")
+end
+
+local function cleanDialog(s)
+    s = tostring(s or ""):gsub("|", "/"):gsub("\r", " "):gsub("\n", " ")
+    s = s:gsub("%s+", " ")
+    return trim(s)
+end
+
+local function cut(s, n)
+    s = cleanDialog(s)
+    n = tonumber(n) or 70
+    if #s <= n then return s end
+    return s:sub(1, n - 3) .. "..."
+end
+
+local function ms()
+    local t = safe(getTime)
+    if type(t) == "number" then return t end
+    return math.floor((os.clock() or 0) * 1000)
+end
+
+local function stamp()
+    local ok, s = pcall(function() return os.date("%H:%M:%S") end)
+    if ok and type(s) == "string" then return s end
+    return tostring(math.floor(ms() / 1000)) .. "s"
+end
+
+local function push(t, v, max)
+    table.insert(t, 1, v)
+    while #t > (max or 120) do table.remove(t) end
+end
+
+local function worldName()
+    local w = safe(GetWorldName) or safe(getCurrentWorldName) or "UNKNOWN"
+    w = strip(w)
+    if w == "" then w = "UNKNOWN" end
+    return w
+end
+
+local function normalizeWorldName(w)
+    w = strip(w or ""):upper():gsub("[^A-Z0-9_%-]", "")
+    return w
+end
+
+local function localPlayer()
+    return safe(getLocal)
+end
+
+local function myName()
+    local p = localPlayer()
+    local n = strip((p and p.name) or "Jimi"):gsub("^@", "")
+    n = trim(n)
+    if n == "" then n = "Jimi" end
+    return n
+end
+
+local function myNetID()
+    local p = localPlayer()
+    return tonumber(p and (p.netID or p.netid)) or 0
+end
+
+local function sendVar(v)
+    innerVariant = innerVariant + 1
+    pcall(function() sendVariant(v) end)
+    innerVariant = innerVariant - 1
+end
+
+local function sendNameVar(v, id)
+    innerVariant = innerVariant + 1
+    if id then
+        pcall(function() sendVariant(v, tonumber(id)) end)
+    else
+        pcall(function() sendVariant(v) end)
+    end
+    innerVariant = innerVariant - 1
+end
+
+local function sendConsole(text)
+    sendVar({v1 = "OnConsoleMessage", v2 = tostring(text or "")})
+end
+
+local function prefix()
+    return "`9[`6" .. TAG .. "`9] `w"
+end
+
+local function say(text)
+    sendConsole(prefix() .. tostring(text or ""))
+end
+
+local function bubble(text, netid)
+    sendVar({v1 = "OnTalkBubble", v2 = tonumber(netid) or myNetID(), v3 = tostring(text or ""), v4 = 1})
+end
+
+local function overlay(text)
+    sendVar({v1 = "OnTextOverlay", v2 = "`9[`6" .. TAG .. "`9] " .. tostring(text or "")})
+end
+
+local function packet2(text)
+    innerPacket = innerPacket + 1
+    pcall(function() sendPacket(2, tostring(text or "")) end)
+    innerPacket = innerPacket - 1
+end
+
+local function itemCount(id)
+    id = tonumber(id) or 0
+    if growtopia and type(growtopia.checkInventoryCount) == "function" then
+        local c = safe(growtopia.checkInventoryCount, id)
+        if type(c) == "number" then return c end
+    end
+    local inv = safe(getInventory)
+    local total = 0
+    if type(inv) == "table" then
+        for _, it in pairs(inv) do
+            local iid = tonumber(it.id or it.id_ or it.itemID or it.itemid)
+            if iid == id then total = total + (tonumber(it.amount or it.count or it.count_ or 0) or 0) end
+        end
+    end
+    return total
+end
+
+local function lockInfo(id)
+    for _, l in ipairs(locks) do
+        if l.id == tonumber(id) then return l end
+    end
+    return {id = tonumber(id) or 0, short = "ITEM", name = "Item", value = 0}
+end
+
+local function valueText(value)
+    value = math.floor(tonumber(value) or 0)
+    local bgl = math.floor(value / 10000)
+    value = value % 10000
+    local dl = math.floor(value / 100)
+    local wl = value % 100
+    local out = {}
+    if bgl > 0 then table.insert(out, bgl .. " BGL") end
+    if dl > 0 then table.insert(out, dl .. " DL") end
+    if wl > 0 then table.insert(out, wl .. " WL") end
+    if #out == 0 then return "0 WL" end
+    return table.concat(out, " + ")
+end
+
+local function dialog(s)
+    if growtopia and type(growtopia.sendDialog) == "function" then
+        growtopia.sendDialog(s)
+    else
+        sendVar({v1 = "OnDialogRequest", v2 = s})
+    end
+end
+
+local function theme()
+    return "set_border_color|"..BORDER_COLOR.."\nset_bg_color|"..BG_COLOR.."\nset_default_color|`9\n"
+end
+
+local function playerNameByNetID(id)
+    id = tonumber(id) or 0
+    if id <= 0 then return "" end
+    local p = safe(getPlayerByNetID, id)
+    if type(p) == "table" then
+        local n = strip(p.name or p.name_ or p.userName or ""):gsub("^@", "")
+        if trim(n) ~= "" then return trim(n) end
+    end
+    local list = safe(getPlayerList)
+    if type(list) == "table" then
+        for _, pl in pairs(list) do
+            local nid = tonumber(pl.netID or pl.netid or pl.net_id)
+            if nid == id then
+                local n = strip(pl.name or pl.name_ or pl.userName or ""):gsub("^@", "")
+                if trim(n) ~= "" then return trim(n) end
+            end
+        end
+    end
+    return ""
+end
+
+local function escPattern(s)
+    return tostring(s):gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
+end
+
+local function nickPlayerList()
+    local list = safe(getPlayerList)
+    if type(list) == "table" then return list end
+    return {}
+end
+
+local function nickLocalName()
+    local p = localPlayer()
+    local n = strip((p and p.name) or ""):gsub("^@", "")
+    n = trim(n)
+    if n ~= "" then return n end
+    return myName()
+end
+
+local function nickNetID()
+    local id = myNetID()
+    if id > 0 then return id end
+    local n = nickLocalName()
+    for _, pl in pairs(nickPlayerList()) do
+        if strip(pl.name or ""):gsub("^@", "") == n then
+            id = tonumber(pl.netID or pl.netid or pl.net_id)
+            if id then return id end
+        end
+    end
+    return 0
+end
+
+local function nickBaseName()
+    if nickName ~= "" then return nickName end
+    if nickReal ~= "" then return nickReal end
+    return nickLocalName()
+end
+
+local function nickVisualText()
+    return "`9<`6ProxyJimi`9> `2" .. nickBaseName()
+end
+
+local function setVisualName(name)
+    local id = nickNetID()
+    if id <= 0 then return false end
+    sendNameVar({v1 = "OnNameChanged", v2 = tostring(name or nickVisualText())}, id)
+    return true
+end
+
+local function applyNick()
+    if nickReal == "" then nickReal = nickLocalName() end
+    if nickName == "" then nickName = nickReal end
+    return setVisualName(nickVisualText())
+end
+
+local function nickReplace(text)
+    if nickReal == "" or nickName == "" or nickReal == nickName then return text end
+    text = tostring(text or "")
+    text = text:gsub(escPattern(nickReal), nickName)
+    text = text:gsub(escPattern(nickReal:lower()), nickName)
+    return text
+end
+
+local function wheelNickName(name)
+    local n = trim(strip(name or ""):gsub("^@", ""))
+    if nickReal ~= "" and nickName ~= "" then
+        local a = n:lower()
+        if a == nickReal:lower() or a == nickName:lower() then
+            return nickName
+        end
+    end
+    return n
+end
+
+local function setNick(name)
+    name = trim(name)
+    if strip(name):gsub("%s+", "") == "" then say("`4nick kosong"); return true end
+    if nickReal == "" then nickReal = nickLocalName() end
+    nickName = name
+    if applyNick() then say("`2Nick: `w" .. strip(name)) else say("`4nick gagal") end
+    return true
+end
+
+local function fastText(mode)
+    if mode == "pull" then return "Pull" end
+    if mode == "kick" then return "Kick" end
+    if mode == "ban" then return "Ban" end
+    if mode == "trade" then return "Trade" end
+    return "Wrench"
+end
+
+local function fastButton(mode)
+    if mode == "pull" then return "pull" end
+    if mode == "kick" then return "kick" end
+    if mode == "ban" then return "world_ban" end
+    if mode == "trade" then return "trade" end
+    return ""
+end
+
+local function setFast(mode)
+    fastMode = mode or ""
+    pendingWrench = {netid = 0, name = "", untilMs = 0}
+    if fastMode == "" then
+        say("`4wrench off")
+        overlay("`4wrench off")
+    else
+        say("`2change fast " .. fastMode)
+        overlay("`2change fast " .. fastMode)
+    end
+    return true
+end
