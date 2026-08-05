@@ -1,0 +1,229 @@
+
+local function doFastWrench(netid)
+    netid = tonumber(netid) or 0
+    if netid <= 0 or fastMode == "" or netid == myNetID() then return false end
+    local btn = fastButton(fastMode)
+    if btn == "" then return false end
+    local name = playerNameByNetID(netid)
+    if name == "" then name = "player" end
+    pendingWrench = {netid = netid, name = name, untilMs = ms() + 2000}
+    blockPopupUntil = ms() + 2000
+    local mode = fastMode
+    runThread(function()
+        sleep(80)
+        if fastMode ~= mode or pendingWrench.netid ~= netid then return end
+        packet2("action|dialog_return\ndialog_name|popup\nnetID|" .. tostring(netid) .. "|\nbuttonClicked|" .. btn)
+        if mode == "ban" then
+            sleep(120)
+            if fastMode == mode and pendingWrench.netid == netid then
+                packet2("action|dialog_return\ndialog_name|popup\nnetID|" .. tostring(netid) .. "|\nbuttonClicked|worldban")
+            end
+        end
+        overlay("`2" .. fastText(mode) .. " `w" .. name)
+    end)
+    return false
+end
+
+local function isFastPlayerPopup(text)
+    text = tostring(text or "")
+    if text == "" then return false end
+    local low = text:lower()
+    local hasButton = low:find("button|pull", 1, true)
+        or low:find("button|kick", 1, true)
+        or low:find("button|world_ban", 1, true)
+        or low:find("button|trade", 1, true)
+        or low:find("buttonclicked|pull", 1, true)
+        or low:find("buttonclicked|kick", 1, true)
+        or low:find("buttonclicked|world_ban", 1, true)
+        or low:find("buttonclicked|trade", 1, true)
+    local looksPlayer = low:find("account age", 1, true)
+        or low:find("send message", 1, true)
+        or low:find("battle leash", 1, true)
+        or low:find("dialog_name|popup", 1, true)
+    return hasButton or (looksPlayer and (low:find("pull", 1, true) or low:find("kick", 1, true) or low:find("world ban", 1, true) or low:find("trade", 1, true)))
+end
+
+local function blockFastPopup(text)
+    if fastMode == "" or not isFastPlayerPopup(text) then return false end
+    if pendingWrench.netid <= 0 or ms() > pendingWrench.untilMs then return ms() < blockPopupUntil end
+    local id = tostring(text or ""):match("netID|(%d+)") or tostring(text or ""):match("netid|(%d+)")
+    if id then return tonumber(id) == pendingWrench.netid end
+    return true
+end
+
+local function spamLine()
+    local t = trim(spamText)
+    if #t > 110 then t = t:sub(1, 110) end
+    if not spamColorChat then return t end
+    local c = spamColors[spamColorIndex] or "`2"
+    spamColorIndex = spamColorIndex + 1
+    if spamColorIndex > #spamColors then spamColorIndex = 1 end
+    return c .. t
+end
+
+local function startSpam()
+    spamText = cleanDialog(spamText)
+    spamDelay = tonumber(spamDelay) or 1200
+    if spamDelay < 800 then spamDelay = 800 end
+    if spamDelay > 60000 then spamDelay = 60000 end
+    if spamText == "" then
+        say("`4empty spam text")
+        return true
+    end
+    if spamActive then
+        say("`6spam updated")
+        return true
+    end
+    spamActive = true
+    spamSerial = spamSerial + 1
+    local token = spamSerial
+    say("`2spam start")
+    runThread(function()
+        while spamActive and token == spamSerial do
+            packet2("action|input\n|text|" .. spamLine())
+            sleep(spamDelay)
+        end
+    end)
+    return true
+end
+
+local function stopSpam()
+    spamActive = false
+    spamSerial = spamSerial + 1
+    say("`4spam off")
+    overlay("`4spam off")
+    return true
+end
+
+local function showSpamDialog()
+    local s = theme()
+    s = s .. "add_label_with_icon|big|[`c#Jimi`6Proxy`9] `2Spammer|left|"..SPAM_ICON.."|\n"
+    s = s .. "add_smalltext|`9Stop: `2/soff `8| `9Min delay: `2800ms|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_text_input|spam_text|Spam text:|" .. cleanDialog(spamText) .. "|120|\n"
+    s = s .. "add_text_input|spam_delay|Delay ms:|" .. tostring(spamDelay) .. "|6|\n"
+    s = s .. "add_checkbox|spam_color|`2Auto change color|" .. (spamColorChat and "1" or "0") .. "|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_textbox|`8Status: " .. (spamActive and "`2ON" or "`4OFF") .. " `8| `9Delay: `w" .. tostring(spamDelay) .. "ms|left|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_button|spam_start|`2Start Spam|noflags|0|0|\n"
+    s = s .. "end_dialog|spam_dialog|Close||\n"
+    dialog(s)
+    return true
+end
+
+local function dialogValue(packet, key)
+    packet = tostring(packet or "")
+    key = tostring(key or "")
+    local v = packet:match("\n" .. key .. "|([^\n\r]*)")
+    if v == nil then v = packet:match("^" .. key .. "|([^\n\r]*)") end
+    return v
+end
+
+local function handleSpamDialog(packet)
+    local text = dialogValue(packet, "spam_text")
+    local delay = dialogValue(packet, "spam_delay")
+    local color = dialogValue(packet, "spam_color")
+    if text ~= nil then spamText = cleanDialog(text) end
+    if delay ~= nil then spamDelay = tonumber(delay) or spamDelay end
+    spamColorChat = tostring(color) == "1"
+    spamDelay = tonumber(spamDelay) or 1200
+    if spamDelay < 800 then spamDelay = 800 end
+    if spamDelay > 60000 then spamDelay = 60000 end
+    local button = packet:match("buttonClicked|([^\n\r]+)") or ""
+    if button == "spam_start" then return startSpam() end
+    return true
+end
+
+local function showNews()
+    local s = theme()
+    s = s .. "add_label_with_icon|big|[`c#Jimi`6Proxy`9] `2Information|left|9474|\n"
+    s = s .. "add_smalltext| Version `2"..VERSION.."|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_label_with_icon|small|Made by `c"..OWNER.."|left|12436|\n"
+    s = s .. "add_smalltext| Last updated `2"..LAST_UPDATED.."|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_label_with_icon|big|`2Proxy Menu|left|32|\n"
+    s = s .. "add_textbox|`2/proxy `9[Open feature menu]|left|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_label_with_icon|big|`2Update Logs|left|5016|\n"
+    for _, txt in ipairs(NEWS) do
+        s = s .. "add_label_with_icon|small|`9"..cleanDialog(txt).."|left|"..NEWS_ICON.."|\n"
+    end
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_label_with_icon|small|Support, report, and update info below.|left|486|\n"
+    s = s .. "add_label_with_icon|small|Jika Menemukan Bug/glitch Tolong dm/report agar di perbaiki owner.|left|486|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_image_button|discord_btn|interface/large/gazette/gazette_5columns_social_btn01.rttex|7imageslayout20|" .. DC_LINK .. "|Join Discord|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_quick_exit|\n"
+    s = s .. "end_dialog|news_close|||\n"
+    dialog(s)
+end
+
+local function showDiscord()
+    local s = theme()
+    s = s .. "add_label_with_icon|big|[`c#Jimi`6Proxy`9] `5Discord|left|486|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_textbox|`9Join Discord for update, request, and report bug.|left|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_image_button|discord_btn|interface/large/gazette/gazette_5columns_social_btn01.rttex|7imageslayout20|" .. DC_LINK .. "|Join Discord|\n"
+    s = s .. "add_quick_exit|\n"
+    s = s .. "end_dialog|discord_close|||\n"
+    dialog(s)
+    say("`5Discord: `b" .. DC_LINK)
+end
+
+local function showWA()
+    local s = theme()
+    s = s .. "add_label_with_icon|big|[`c#Jimi`6Proxy`9] `2WhatsApp|left|32|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_textbox|`9Join WhatsApp group for chat and support.|left|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_url_button||`2Join WhatsApp|NOFLAGS|" .. WA_LINK .. "|Open WhatsApp?|0|0|\n"
+    s = s .. "add_quick_exit|\n"
+    s = s .. "end_dialog|wa_close|| |\n"
+    dialog(s)
+    say("`2WhatsApp: `b" .. WA_LINK)
+end
+
+local function showTotalFitur()
+    local s = theme()
+    s = s .. "add_label_with_icon|big|[`c#Jimi`6Proxy`9] `2All Commands|left|32|\n"
+    s = s .. "add_smalltext| Version `2"..VERSION.."|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_textbox|`9Commands list|left|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_label_with_icon|small|`2Proxy `9/proxy /menu /news|left|32|\n"
+    s = s .. "add_label_with_icon|small|`2Drop `9/dw /dd /db /cd /daw|left|13810|\n"
+    s = s .. "add_label_with_icon|small|`2Wheel `9/reme /qeme /leme|left|758|\n"
+    s = s .. "add_label_with_icon|small|`2BJ `9/p1 /p2 /pg1 /pg2 /take /tax /s|left|112|\n"
+    s = s .. "add_label_with_icon|small|`2Donate Box `9/setwsave /save|left|"..DBOX_ID.."|\n"
+    s = s .. "add_label_with_icon|small|`2Nick `9/nick|left|"..NICK_ICON.."|\n"
+    s = s .. "add_label_with_icon|small|`2Fast Wrench `9/fastpull /fastkick /fastban /fasttrade /woff|left|"..WRENCH_ICON.."|\n"
+    s = s .. "add_label_with_icon|small|`2Spammer `9/spam /soff|left|"..SPAM_ICON.."|\n"
+    s = s .. "add_label_with_icon|small|`2Logs `9/logs /totalfitur /balance|left|"..LOGS_ICON.."|\n"
+    s = s .. "add_label_with_icon|small|`2Report `9/report /dc /discord /wa|left|486|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_quick_exit|\n"
+    s = s .. "end_dialog|fitur_close|||\n"
+    dialog(s)
+end
+
+local function showMenu()
+    local s = theme()
+    s = s .. "add_label_with_icon|big|[`c#Jimi`6Proxy`9] `2Features|left|9474|\n"
+    s = s .. "add_smalltext| Version `2"..VERSION.."|\n"
+    s = s .. "add_textbox|`8" .. string.rep(" ", 88) .. "|left|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_label_with_icon|small|Made by `c"..OWNER.."|left|12436|\n"
+    s = s .. "add_smalltext| Last updated `2"..LAST_UPDATED.."|\n"
+    s = s .. "add_textbox|`2/news `9[Update logs and info]|left|\n"
+    s = s .. "add_spacer|small|\n"
+    s = s .. "add_label_with_icon|big|`2Drop|left|13810|\n"
+    s = s .. "add_textbox|`2/dw  `9[Drop World Lock]|\n"
+    s = s .. "add_textbox|`2/dd  `9[Drop `1Diamond Lock`9]|\n"
+    s = s .. "add_textbox|`2/db  `9[Drop `eBlue Gem Lock`9]|\n"
+    s = s .. "add_textbox|`2/cd  `9[Custom Drop]|\n"
+    s = s .. "add_textbox|`2/daw `9[Drop All Locks]|\n"
+    s = s .. 
