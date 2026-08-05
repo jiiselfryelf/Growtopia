@@ -1,0 +1,315 @@
+lue) or 0)
+    if value <= 0 then say("`4Example: /cd 150"); return true end
+    local b = math.floor(value / 10000)
+    value = value % 10000
+    local d = math.floor(value / 100)
+    local w = value % 100
+    if itemCount(BGL_ID) < b or itemCount(DL_ID) < d or itemCount(WL_ID) < w then
+        say("`4Not enough locks for " .. valueText(b * 10000 + d * 100 + w))
+        return true
+    end
+    if b > 0 then dropItemFast(BGL_ID, b, "BGL"); sleep(85) end
+    if d > 0 then dropItemFast(DL_ID, d, "DL"); sleep(85) end
+    if w > 0 then dropItemFast(WL_ID, w, "WL"); sleep(85) end
+    return true
+end
+
+local function dropAllLocks()
+    local b, d, w = itemCount(BGL_ID), itemCount(DL_ID), itemCount(WL_ID)
+    if b + d + w <= 0 then say("`4No locks."); return true end
+    if b > 0 then dropItemFast(BGL_ID, b, "BGL"); sleep(85) end
+    if d > 0 then dropItemFast(DL_ID, d, "DL"); sleep(85) end
+    if w > 0 then dropItemFast(WL_ID, w, "WL"); sleep(85) end
+    return true
+end
+
+local function tileID(t)
+    return tonumber(t and (t.fg or t.foreground or t.id or t.itemid)) or 0
+end
+
+local function tilePos(t)
+    if type(t) ~= "table" then return nil, nil end
+    local x = tonumber(t.x or t.posX or t.px or (t.pos and t.pos.x))
+    local y = tonumber(t.y or t.posY or t.py or (t.pos and t.pos.y))
+    if x and y and x > 1000 and y > 1000 then
+        x = math.floor(x / 32)
+        y = math.floor(y / 32)
+    end
+    return x, y
+end
+
+local function playerTile()
+    local p = localPlayer()
+    local x = tonumber(p and (p.posX or p.x or (p.pos and p.pos.x))) or 0
+    local y = tonumber(p and (p.posY or p.y or (p.pos and p.pos.y))) or 0
+    if x > 1000 or y > 1000 then
+        x = math.floor(x / 32)
+        y = math.floor(y / 32)
+    end
+    return x, y
+end
+
+local function nearestDonateBox()
+    local px, py = playerTile()
+    local best, bestd = nil, 99999999
+    local tiles = safe(getTiles)
+    if type(tiles) == "table" then
+        for _, t in pairs(tiles) do
+            if tileID(t) == DBOX_ID then
+                local x, y = tilePos(t)
+                if x and y then
+                    local d = (x - px) * (x - px) + (y - py) * (y - py)
+                    if d < bestd then bestd = d; best = {x = x, y = y, sign = ""} end
+                end
+            end
+        end
+    end
+    if best then return best end
+    if type(getTile) == "function" then
+        for y = 0, 59 do
+            for x = 0, 99 do
+                local t = safe(getTile, x, y)
+                if tileID(t) == DBOX_ID then
+                    local d = (x - px) * (x - px) + (y - py) * (y - py)
+                    if d < bestd then bestd = d; best = {x = x, y = y, sign = ""} end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function boxDist(box)
+    if not box then return 999 end
+    local px, py = playerTile()
+    return math.abs((box.x or 0) - px) + math.abs((box.y or 0) - py)
+end
+
+local function openDonateBox(box)
+    if not box then return end
+    pcall(function() sendPacketRaw(false, {type = 3, value = 32, px = box.x, py = box.y, x = box.x * 32, y = box.y * 32}) end)
+end
+
+local function donatePacket(id, amount, box)
+    box = box or donateBox
+    local sign = tostring(box.sign or "")
+    packet2("action|dialog_return\ndialog_name|give_item\nitemID|" .. tostring(id) .. "\ntilex|" .. tostring(box.x) .. "\ntiley|" .. tostring(box.y) .. "\nbuttonClicked|give\n\ncount|" .. tostring(amount) .. "\nsign_text|" .. sign)
+end
+
+local function sendDonateTry(job)
+    if not job then return end
+    donatePacket(job.id, job.count, job.box)
+end
+
+local function finishDonateJob(job)
+    if not job then return end
+    local after = itemCount(job.id)
+    if after < job.before then
+        local saved = job.before - after
+        local msg = "Saved " .. tostring(saved) .. "x " .. tostring(job.label)
+        logDrop(msg)
+        say("`2" .. msg)
+    else
+        donateFail = donateFail + 1
+        say("`4save failed")
+    end
+end
+
+local function nextDonate()
+    if #donateQueue <= 0 then
+        donateBusy = false
+        pendingDonate = nil
+        if donateFail > 0 then say("`6save done") else say("`2save done") end
+        return
+    end
+    local job = table.remove(donateQueue, 1)
+    job.before = itemCount(job.id)
+    pendingDonate = job
+    openDonateBox(job.box)
+    runThread(function()
+        sleep(650)
+        if pendingDonate == job then
+            sendDonateTry(job)
+            pendingDonate = nil
+            sleep(1600)
+            finishDonateJob(job)
+            sleep(250)
+            nextDonate()
+        end
+    end)
+end
+
+local function donateAllLocks()
+    if donateBusy then say("`6save busy"); return true end
+    local b, d, w = itemCount(BGL_ID), itemCount(DL_ID), itemCount(WL_ID)
+    if b + d + w <= 0 then say("`4no locks"); return true end
+    local box = nearestDonateBox()
+    if not box then say("`4no box"); return true end
+    donateBox = box
+    donateQueue = {}
+    if b > 0 then table.insert(donateQueue, {id = BGL_ID, count = b, label = "BGL", box = box}) end
+    if d > 0 then table.insert(donateQueue, {id = DL_ID, count = d, label = "DL", box = box}) end
+    if w > 0 then table.insert(donateQueue, {id = WL_ID, count = w, label = "WL", box = box}) end
+    donateBusy = true
+    donateFail = 0
+    say("`6save `w" .. valueText(b * 10000 + d * 100 + w))
+    nextDonate()
+    return true
+end
+
+local function runSave()
+    if saveWorld == "" then say("`4set /setwsave WORLD"); return true end
+    runThread(function()
+        say("`6Warp: `w" .. saveWorld)
+        if growtopia and type(growtopia.warpTo) == "function" then
+            growtopia.warpTo(saveWorld)
+        else
+            packet2("action|join_request\nname|" .. saveWorld .. "\ninvitedWorld|0")
+        end
+        sleep(4200)
+        donateAllLocks()
+    end)
+    return true
+end
+
+local BJ_LOCK_VALUE = {
+    [WL_ID] = 1,
+    [DL_ID] = 100,
+    [BGL_ID] = 10000
+}
+
+local BJ_LOCK_NAME = {
+    [WL_ID] = "WL",
+    [DL_ID] = "DL",
+    [BGL_ID] = "BGL"
+}
+
+local bj = {
+    p1 = nil,
+    p2 = nil,
+    pg1 = nil,
+    pg2 = nil,
+    tax = 3,
+    round = 0,
+    payoutBusy = false,
+    pendingDrop = nil,
+    bet = nil
+}
+
+local function bjPlayerTile()
+    local p = localPlayer()
+    local x = tonumber(p and (p.posX or p.x or (p.pos and p.pos.x))) or 0
+    local y = tonumber(p and (p.posY or p.y or (p.pos and p.pos.y))) or 0
+    return math.floor(x / 32), math.floor(y / 32)
+end
+
+local function bjSamePos(a, b)
+    return a and b and a.x == b.x and a.y == b.y
+end
+
+local function bjPosText(pos)
+    if not pos then return "belum set" end
+    return tostring(pos.x) .. "," .. tostring(pos.y)
+end
+
+local function bjObjectList()
+    local list = safe(getObjectList)
+    if type(list) == "table" then return list end
+    list = safe(GetObjectList)
+    if type(list) == "table" then return list end
+    return {}
+end
+
+local function bjObjectPos(obj)
+    if type(obj) ~= "table" then return nil, nil end
+    return tonumber(obj.posX or obj.x or (obj.pos and obj.pos.x)), tonumber(obj.posY or obj.y or (obj.pos and obj.pos.y))
+end
+
+local function bjObjectTile(obj)
+    local x, y = bjObjectPos(obj)
+    if not x or not y then return nil, nil end
+    return math.floor(x / 32), math.floor(y / 32)
+end
+
+local function bjObjectItemID(obj)
+    return tonumber(obj and (obj.itemid or obj.itemID or obj.id_)) or 0
+end
+
+local function bjObjectAmount(obj)
+    return math.max(0, math.floor(tonumber(obj and (obj.amount or obj.count)) or 0))
+end
+
+local function bjObjectOID(obj)
+    return tonumber(obj and (obj.id or obj.oid or obj.objectID)) or 0
+end
+
+local function bjCollectObject(obj)
+    local oid = bjObjectOID(obj)
+    local x, y = bjObjectPos(obj)
+    if oid <= 0 or not x or not y then return false end
+    pcall(function() sendPacketRaw(false, {type = 11, value = oid, x = x, y = y}) end)
+    return true
+end
+
+local function bjWaitUntil(cond, timeout, delay)
+    timeout = tonumber(timeout) or 1500
+    delay = tonumber(delay) or 80
+    local started = ms()
+    while ms() - started < timeout do
+        if cond() then return true end
+        sleep(delay)
+    end
+    return cond()
+end
+
+local function bjInventoryValue()
+    return itemCount(BGL_ID) * 10000 + itemCount(DL_ID) * 100 + itemCount(WL_ID)
+end
+
+local function bjActivateItem(id)
+    local beforeB = itemCount(BGL_ID)
+    local beforeD = itemCount(DL_ID)
+    local beforeW = itemCount(WL_ID)
+    pcall(function() sendPacketRaw(false, {type = 10, value = tonumber(id) or 0}) end)
+    return bjWaitUntil(function()
+        return itemCount(BGL_ID) ~= beforeB or itemCount(DL_ID) ~= beforeD or itemCount(WL_ID) ~= beforeW
+    end, 1800, 100)
+end
+
+local function bjFindDropPlan(value)
+    value = math.max(0, math.floor(tonumber(value) or 0))
+    local haveB = itemCount(BGL_ID)
+    local haveD = itemCount(DL_ID)
+    local haveW = itemCount(WL_ID)
+    local maxB = math.min(math.floor(value / 10000), haveB)
+    for b = maxB, 0, -1 do
+        local left = value - b * 10000
+        local d = math.min(math.floor(left / 100), haveD)
+        local w = left - d * 100
+        if w <= haveW then return {bgl = b, dl = d, wl = w} end
+    end
+    return nil
+end
+
+local function bjPrepareDropPlan(value)
+    value = math.max(0, math.floor(tonumber(value) or 0))
+    if bjInventoryValue() < value then return nil, "lock kurang " .. valueText(value - bjInventoryValue()) end
+    for _ = 1, 110 do
+        local plan = bjFindDropPlan(value)
+        if plan then return plan end
+        if itemCount(BGL_ID) > 0 then
+            say("`6Pecah 1 BGL")
+            if not bjActivateItem(BGL_ID) then return nil, "gagal pecah BGL" end
+        elseif itemCount(DL_ID) > 0 then
+            say("`6Pecah 1 DL")
+            if not bjActivateItem(DL_ID) then return nil, "gagal pecah DL" end
+        else
+            return nil, "pecahan ga cukup"
+        end
+        sleep(180)
+    end
+    return nil, "convert kebanyakan"
+end
+
+local function bjConfirmDrop(id, count)
+    packet2("action|dialo
