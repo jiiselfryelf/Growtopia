@@ -1,0 +1,3 @@
+-- add_label_with_ele_icon
+-- elemen dialog yang ada di referensi lama.
+-- format param belum pasti, jadi gak asal ngarang contoh.
